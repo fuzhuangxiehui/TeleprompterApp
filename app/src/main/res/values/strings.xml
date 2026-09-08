@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">短视频提词器</string>
+    <string name="app_version">1.0.0</string>
+
+    <!-- Privacy consent dialog -->
+    <string name="privacy_title">隐私政策与用户协议</string>
+    <string name="privacy_message">欢迎使用「提词器」！\n\n在您使用本应用之前，请仔细阅读我们的隐私政策：\n\n• 本应用不收集任何个人数据\n• 不上传任何信息到服务器\n• 不包含任何广告或追踪SDK\n• 摄像头和麦克风仅用于视频录制\n• 所有数据仅保存在您的设备本地\n\n点击「同意」即表示您已阅读并同意隐私政策。</string>
+    <string name="privacy_agree">同意并继续</string>
+    <string name="privacy_disagree">不同意</string>
+    <string name="privacy_view_full">查看完整隐私政策</string>
+
+    <!-- Camera -->
+    <string name="camera_not_found">未找到前置摄像头</string>
+    <string name="camera_open_error">摄像头打开出错</string>
+    <string name="camera_not_ready">摄像头未就绪，请稍候</string>
+    <string name="camera_open_failed">打开摄像头失败</string>
+
+    <!-- Recording -->
+    <string name="record_start_failed">录制启动失败，请重试</string>
+    <string name="record_session_failed">录制会话配置失败</string>
+    <string name="record_start_exception">录制启动异常</string>
+
+    <!-- Zoom -->
+    <string name="zoom_format">%.1fx</string>
+
+    <!-- Teleprompter -->
+    <string name="opacity_format">透明度: %d%%</string>
+
+    <!-- Default teleprompter text -->
+    <string name="default_teleprompter_text">欢迎使用提词器！\n\n请点击编辑按钮，粘贴您要提词的内容。\n\n录制时，提词文字会在此处滚动显示，帮助您自然地面对镜头讲话。\n\n您可以调节：\n- 文字大小（字体按钮）\n- 滚动速度（速度滑块）\n- 文字透明度（透明度按钮）\n- 镜头缩放（缩放按钮）\n\n开始录制后，控制栏会自动隐藏，轻触屏幕可重新显示。</string>
+</resources>

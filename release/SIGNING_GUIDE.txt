@@ -1,0 +1,28 @@
+# ============================================================
+# 提词器 App - 发布签名配置
+# ============================================================
+#
+# 生成签名密钥（在项目根目录执行）：
+#
+# keytool -genkeypair -v \
+#   -keystore release/teleprompter_release.jks \
+#   -keyalg RSA -keysize 2048 -validity 10000 \
+#   -alias teleprompter \
+#   -storepass YOUR_STORE_PASSWORD \
+#   -keypass YOUR_KEY_PASSWORD
+#
+# 注意事项：
+# 1. 请将 YOUR_STORE_PASSWORD 和 YOUR_KEY_PASSWORD 替换为你自己的强密码
+# 2. -validity 10000 表示密钥有效期约27年
+# 3. 生成后会创建 release/teleprompter_release.jks 文件
+# 4. ⚠️ 务必备份 .jks 文件和密码！丢失后无法更新应用
+# 5. 不要将 .jks 文件提交到版本控制
+#
+# 签名信息填入后，取消 build.gradle.kts 中 signingConfigs 的注释
+# 并将密码填入 release/signing.properties
+#
+# signing.properties 格式：
+#   STORE_FILE=teleprompter_release.jks
+#   STORE_PASSWORD=你的密钥库密码
+#   KEY_ALIAS=teleprompter
+#   KEY_PASSWORD=你的密钥密码

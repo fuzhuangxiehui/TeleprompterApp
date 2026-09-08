@@ -1,0 +1,20 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+
+# Signing keys and passwords - NEVER commit these
+release/*.jks
+release/teleprompter_release.jks
+release/signing.properties
+
+# Built APKs
+*.apk
+*.aab

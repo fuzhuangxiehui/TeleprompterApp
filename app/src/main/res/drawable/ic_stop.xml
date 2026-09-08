@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="72dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <!-- White square (stop button) -->
+    <path
+        android:fillColor="#FFFF0000"
+        android:pathData="M18,18h36v36h-36z"/>
+</vector>
