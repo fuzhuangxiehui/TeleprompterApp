@@ -1,0 +1,1611 @@
+软件名称：短视频提词器
+版本号：V1.0
+源程序总行数：1603
+
+============================================================
+源程序代码（不足60页，全部提交）
+============================================================
+
+   1 | // ============ AndroidManifest.xml ============
+   2 | 
+   3 | <?xml version="1.0" encoding="utf-8"?>
+   4 | <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+   5 |     xmlns:tools="http://schemas.android.com/tools">
+   6 | 
+   7 |     <!-- Camera permission -->
+   8 |     <uses-permission android:name="android.permission.CAMERA" />
+   9 |     <!-- Microphone for recording audio with video -->
+  10 |     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  11 |     <!-- Storage for saving videos (legacy, needed on Android 9 and below) -->
+  12 |     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+  13 |         android:maxSdkVersion="28" />
+  14 |     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+  15 |         android:maxSdkVersion="32" />
+  16 |     <!-- Keep screen on during recording -->
+  17 |     <uses-permission android:name="android.permission.WAKE_LOCK" />
+  18 |     <!-- Notification permission (Android 13+) -->
+  19 |     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  20 | 
+  21 |     <uses-feature android:name="android.hardware.camera.any" />
+  22 |     <uses-feature android:name="android.hardware.camera.front" android:required="true" />
+  23 | 
+  24 |     <application
+  25 |         android:allowBackup="true"
+  26 |         android:icon="@mipmap/ic_launcher"
+  27 |         android:label="@string/app_name"
+  28 |         android:supportsRtl="true"
+  29 |         android:theme="@style/Theme.TeleprompterApp"
+  30 |         tools:targetApi="34">
+  31 | 
+  32 |         <!-- Privacy consent screen - LAUNCHER entry point -->
+  33 |         <activity
+  34 |             android:name=".PrivacyConsentActivity"
+  35 |             android:exported="true"
+  36 |             android:screenOrientation="portrait"
+  37 |             android:theme="@style/Theme.TeleprompterApp">
+  38 |             <intent-filter>
+  39 |                 <action android:name="android.intent.action.MAIN" />
+  40 |                 <category android:name="android.intent.category.LAUNCHER" />
+  41 |             </intent-filter>
+  42 |         </activity>
+  43 | 
+  44 |         <!-- Main app activity -->
+  45 |         <activity
+  46 |             android:name=".MainActivity"
+  47 |             android:exported="false"
+  48 |             android:screenOrientation="portrait"
+  49 |             android:keepScreenOn="true">
+  50 |         </activity>
+  51 | 
+  52 |     </application>
+  53 | 
+  54 | </manifest>
+  55 | 
+  56 | // ============ CameraHelper.kt ============
+  57 | 
+  58 | package com.teleprompter.app
+  59 | 
+  60 | import android.content.ContentValues
+  61 | import android.content.Context
+  62 | import android.hardware.camera2.*
+  63 | import android.media.MediaRecorder
+  64 | import android.os.Handler
+  65 | import android.os.HandlerThread
+  66 | import android.provider.MediaStore
+  67 | import android.util.Log
+  68 | import android.view.Surface
+  69 | import android.view.TextureView
+  70 | 
+  71 | 
+  72 | class CameraHelper(
+  73 |     private val context: Context,
+  74 |     private val textureView: TextureView
+  75 | ) {
+  76 |     private val TAG = "CameraHelper"
+  77 | 
+  78 |     private var cameraManager: CameraManager? = null
+  79 |     private var cameraDevice: CameraDevice? = null
+  80 |     private var captureSession: CameraCaptureSession? = null
+  81 |     private var mediaRecorder: MediaRecorder? = null
+  82 | 
+  83 |     private var backgroundThread: HandlerThread? = null
+  84 |     private var backgroundHandler: Handler? = null
+  85 | 
+  86 |     private var isRecording = false
+  87 |     var isOpened = false
+  88 |         private set
+  89 | 
+  90 |     private var currentVideoPath: String? = null
+  91 |     private var frontCameraId: String? = null
+  92 | 
+  93 |     // Sensor video size (always landscape orientation from camera sensor)
+  94 |     // e.g. 1920x1080 — these are the raw sensor dimensions
+  95 |     private var sensorWidth = 1920
+  96 |     private var sensorHeight = 1080
+  97 | 
+  98 |     // Portrait output dimensions (swapped for display/recording in portrait)
+  99 |     // e.g. 1080x1920 — what the final video looks like when rotated
+ 100 |     val portraitWidth: Int get() = sensorHeight  // 1080
+ 101 |     val portraitHeight: Int get() = sensorWidth  // 1920
+ 102 | 
+ 103 |     // Zoom control — reduces wide-angle barrel distortion
+ 104 |     // Front cameras typically have ~2-3mm focal length (very wide), causing
+ 105 |     // noticeable face distortion at close range. A 1.3-1.5x zoom crops the
+ 106 |     // edges (where distortion is worst) and simulates a ~4-5mm focal length,
+ 107 |     // giving much more natural-looking close-up video.
+ 108 |     private var zoomRatio = 1.0f  // 1.0 = no zoom (wide angle), 1.5 = moderate zoom
+ 109 |     var maxZoomRatio = 1.0f  // hardware max, public for MainActivity to read
+ 110 |     private var activeArrayRect: android.graphics.Rect? = null  // sensor active array
+ 111 | 
+ 112 |     // Callback for recording state
+ 113 |     var onRecordingStopped: ((String?) -> Unit)? = null
+ 114 | 
+ 115 |     init {
+ 116 |         startBackgroundThread()
+ 117 |     }
+ 118 | 
+ 119 |     private fun startBackgroundThread() {
+ 120 |         backgroundThread = HandlerThread("CameraBackground").apply { start() }
+ 121 |         backgroundHandler = Handler(backgroundThread!!.looper)
+ 122 |     }
+ 123 | 
+ 124 |     private fun stopBackgroundThread() {
+ 125 |         try {
+ 126 |             backgroundThread?.quitSafely()
+ 127 |             backgroundThread?.join()
+ 128 |             backgroundThread = null
+ 129 |             backgroundHandler = null
+ 130 |         } catch (e: Exception) {
+ 131 |             Log.e(TAG, "Error stopping background thread", e)
+ 132 |         }
+ 133 |     }
+ 134 | 
+ 135 |     fun openFrontCamera() {
+ 136 |         cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+ 137 | 
+ 138 |         try {
+ 139 |             // Find front camera
+ 140 |             frontCameraId = null
+ 141 |             for (id in cameraManager!!.cameraIdList) {
+ 142 |                 val chars = cameraManager!!.getCameraCharacteristics(id)
+ 143 |                 if (chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) {
+ 144 |                     frontCameraId = id
+ 145 |                     break
+ 146 |                 }
+ 147 |             }
+ 148 | 
+ 149 |             if (frontCameraId == null) {
+ 150 |                 Log.e(TAG, "No front camera found on this device")
+ 151 |                 Handler(context.mainLooper).post {
+ 152 |                     android.widget.Toast.makeText(context, "未找到前置摄像头", android.widget.Toast.LENGTH_LONG).show()
+ 153 |                 }
+ 154 |                 return
+ 155 |             }
+ 156 | 
+ 157 |             // Choose a supported video size (sensor reports landscape dimensions)
+ 158 |             val characteristics = cameraManager!!.getCameraCharacteristics(frontCameraId!!)
+ 159 |             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+ 160 |             val videoSizes = map?.getOutputSizes(MediaRecorder::class.java)
+ 161 | 
+ 162 |             // Read zoom range and active array for crop-region zoom
+ 163 |             activeArrayRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+ 164 |             val maxDigitalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
+ 165 |                 ?: 1.0f
+ 166 |             maxZoomRatio = maxDigitalZoom.coerceAtMost(5.0f)  // cap at 5x for safety
+ 167 |             Log.d(TAG, "Active array: ${activeArrayRect}, max digital zoom: ${maxDigitalZoom}")
+ 168 | 
+ 169 |             if (!videoSizes.isNullOrEmpty()) {
+ 170 |                 // Prefer 1920x1080 (landscape sensor dimensions)
+ 171 |                 val preferred = videoSizes.firstOrNull {
+ 172 |                     it.width == 1920 && it.height == 1080
+ 173 |                 }
+ 174 |                 if (preferred != null) {
+ 175 |                     sensorWidth = preferred.width   // 1920
+ 176 |                     sensorHeight = preferred.height  // 1080
+ 177 |                 } else {
+ 178 |                     // Pick largest size that is at most 1920x1080
+ 179 |                     val sorted = videoSizes.sortedByDescending { it.width * it.height }
+ 180 |                     val chosen = sorted.firstOrNull { it.width <= 1920 && it.height <= 1080 }
+ 181 |                         ?: sorted.last()
+ 182 |                     sensorWidth = chosen.width
+ 183 |                     sensorHeight = chosen.height
+ 184 |                 }
+ 185 |                 Log.d(TAG, "Chosen sensor size: ${sensorWidth}x${sensorHeight} (portrait: ${portraitWidth}x${portraitHeight})")
+ 186 |                 Log.d(TAG, "Available sensor sizes: ${videoSizes.map { "${it.width}x${it.height}" }}")
+ 187 |             }
+ 188 | 
+ 189 |             // Check permission
+ 190 |             if (context.checkSelfPermission(android.Manifest.permission.CAMERA) !=
+ 191 |                 android.content.pm.PackageManager.PERMISSION_GRANTED
+ 192 |             ) {
+ 193 |                 Log.e(TAG, "Camera permission not granted")
+ 194 |                 return
+ 195 |             }
+ 196 | 
+ 197 |             openCameraDevice()
+ 198 | 
+ 199 |         } catch (e: Exception) {
+ 200 |             Log.e(TAG, "Failed to open front camera", e)
+ 201 |             Handler(context.mainLooper).post {
+ 202 |                 android.widget.Toast.makeText(context, "打开摄像头失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+ 203 |             }
+ 204 |         }
+ 205 |     }
+ 206 | 
+ 207 |     private fun openCameraDevice() {
+ 208 |         try {
+ 209 |             cameraManager?.openCamera(frontCameraId!!, object : CameraDevice.StateCallback() {
+ 210 |                 override fun onOpened(camera: CameraDevice) {
+ 211 |                     Log.d(TAG, "Camera opened successfully: ${camera.id}")
+ 212 |                     cameraDevice = camera
+ 213 |                     isOpened = true
+ 214 |                     startPreview()
+ 215 |                 }
+ 216 | 
+ 217 |                 override fun onDisconnected(camera: CameraDevice) {
+ 218 |                     Log.w(TAG, "Camera disconnected")
+ 219 |                     camera.close()
+ 220 |                     cameraDevice = null
+ 221 |                     isOpened = false
+ 222 |                 }
+ 223 | 
+ 224 |                 override fun onError(camera: CameraDevice, error: Int) {
+ 225 |                     Log.e(TAG, "Camera open error: $error")
+ 226 |                     camera.close()
+ 227 |                     cameraDevice = null
+ 228 |                     isOpened = false
+ 229 |                     Handler(context.mainLooper).post {
+ 230 |                         android.widget.Toast.makeText(context, "摄像头打开出错(错误码:$error)", android.widget.Toast.LENGTH_LONG).show()
+ 231 |                     }
+ 232 |                 }
+ 233 |             }, backgroundHandler)
+ 234 |         } catch (e: Exception) {
+ 235 |             Log.e(TAG, "Exception opening camera device", e)
+ 236 |         }
+ 237 |     }
+ 238 | 
+ 239 |     private fun startPreview() {
+ 240 |         val device = cameraDevice ?: return
+ 241 |         val surfaceTexture = textureView.surfaceTexture
+ 242 |         if (surfaceTexture == null) {
+ 243 |             Log.w(TAG, "SurfaceTexture not ready")
+ 244 |             return
+ 245 |         }
+ 246 |         try {
+ 247 |             // Set buffer size to match sensor dimensions for correct aspect ratio
+ 248 |             surfaceTexture.setDefaultBufferSize(sensorWidth, sensorHeight)
+ 249 | 
+ 250 |             val surface = Surface(surfaceTexture)
+ 251 | 
+ 252 |             val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+ 253 |                 addTarget(surface)
+ 254 |                 // Apply zoom to reduce wide-angle distortion
+ 255 |                 if (zoomRatio > 1.0f) {
+ 256 |                     set(CaptureRequest.SCALER_CROP_REGION, getCropRegion())
+ 257 |                 }
+ 258 |             }
+ 259 | 
+ 260 |             device.createCaptureSession(
+ 261 |                 listOf(surface),
+ 262 |                 object : CameraCaptureSession.StateCallback() {
+ 263 |                     override fun onConfigured(session: CameraCaptureSession) {
+ 264 |                         Log.d(TAG, "Preview session configured OK")
+ 265 |                         captureSession = session
+ 266 |                         try {
+ 267 |                             requestBuilder.build().let { request ->
+ 268 |                                 session.setRepeatingRequest(request, null, backgroundHandler)
+ 269 |                             }
+ 270 |                         } catch (e: Exception) {
+ 271 |                             Log.e(TAG, "Failed to start repeating preview", e)
+ 272 |                         }
+ 273 |                     }
+ 274 | 
+ 275 |                     override fun onConfigureFailed(session: CameraCaptureSession) {
+ 276 |                         Log.e(TAG, "Preview session configuration FAILED")
+ 277 |                     }
+ 278 |                 },
+ 279 |                 backgroundHandler
+ 280 |             )
+ 281 |         } catch (e: Exception) {
+ 282 |             Log.e(TAG, "Error starting preview", e)
+ 283 |         }
+ 284 |     }
+ 285 | 
+ 286 |     fun updatePreview() {
+ 287 |         if (cameraDevice != null && isOpened) {
+ 288 |             startPreview()
+ 289 |         }
+ 290 |     }
+ 291 | 
+ 292 |     /**
+ 293 |      * Set zoom ratio. 1.0 = no zoom (wide angle), 1.5 = moderate zoom.
+ 294 |      * Higher zoom reduces wide-angle distortion but crops more of the frame.
+ 295 |      * Recommended range: 1.2 - 1.5 for natural-looking portrait video.
+ 296 |      */
+ 297 |     fun setZoom(ratio: Float) {
+ 298 |         zoomRatio = ratio.coerceIn(1.0f, maxZoomRatio)
+ 299 |         Log.d(TAG, "Zoom set to ${zoomRatio}x")
+ 300 |         // Restart preview to apply new zoom
+ 301 |         if (isOpened && !isRecording) {
+ 302 |             startPreview()
+ 303 |         }
+ 304 |     }
+ 305 | 
+ 306 |     fun getZoom(): Float = zoomRatio
+ 307 |     fun getMaxZoom(): Float = maxZoomRatio
+ 308 | 
+ 309 |     /**
+ 310 |      * Calculate the crop region for the current zoom ratio.
+ 311 |      * Zoom works by cropping the sensor active array — a smaller crop = more zoom.
+ 312 |      * This is equivalent to increasing focal length (reducing wide-angle distortion).
+ 313 |      */
+ 314 |     private fun getCropRegion(): android.graphics.Rect {
+ 315 |         val array = activeArrayRect ?: return android.graphics.Rect(0, 0, sensorWidth, sensorHeight)
+ 316 |         if (zoomRatio <= 1.0f) return android.graphics.Rect(array)
+ 317 | 
+ 318 |         val w = (array.width() / zoomRatio).toInt()
+ 319 |         val h = (array.height() / zoomRatio).toInt()
+ 320 |         val left = (array.width() - w) / 2 + array.left
+ 321 |         val top = (array.height() - h) / 2 + array.top
+ 322 |         return android.graphics.Rect(left, top, left + w, top + h)
+ 323 |     }
+ 324 | 
+ 325 |     fun startRecording(outputPath: String): Boolean {
+ 326 |         if (cameraDevice == null || !isOpened) {
+ 327 |             Log.e(TAG, "Camera not opened, cannot record")
+ 328 |             Handler(context.mainLooper).post {
+ 329 |                 android.widget.Toast.makeText(context, "摄像头未就绪", android.widget.Toast.LENGTH_SHORT).show()
+ 330 |             }
+ 331 |             return false
+ 332 |         }
+ 333 | 
+ 334 |         if (isRecording) {
+ 335 |             Log.w(TAG, "Already recording")
+ 336 |             return false
+ 337 |         }
+ 338 | 
+ 339 |         try {
+ 340 |             // Close existing preview session
+ 341 |             captureSession?.close()
+ 342 |             captureSession = null
+ 343 | 
+ 344 |             // Setup MediaRecorder
+ 345 |             val recorder = MediaRecorder()
+ 346 |             mediaRecorder = recorder
+ 347 | 
+ 348 |             recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+ 349 |             recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
+ 350 |             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+ 351 |             recorder.setOutputFile(outputPath)
+ 352 |             recorder.setVideoEncodingBitRate(8 * 1024 * 1024) // 8 Mbps for 1080p
+ 353 |             recorder.setVideoFrameRate(30)
+ 354 |             // Must use sensor dimensions (landscape) for setVideoSize
+ 355 |             // The orientation hint tells the player to display as portrait
+ 356 |             recorder.setVideoSize(sensorWidth, sensorHeight)
+ 357 |             recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+ 358 |             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+ 359 |             recorder.setAudioEncodingBitRate(128000)
+ 360 |             recorder.setAudioSamplingRate(44100)
+ 361 |             // Front camera portrait = 270 degrees
+ 362 |             recorder.setOrientationHint(270)
+ 363 | 
+ 364 |             recorder.prepare()
+ 365 |             Log.d(TAG, "MediaRecorder prepared, sensor: ${sensorWidth}x${sensorHeight}, portrait hint: 270°")
+ 366 | 
+ 367 |             val surfaceTexture = textureView.surfaceTexture!!
+ 368 |             surfaceTexture.setDefaultBufferSize(sensorWidth, sensorHeight)
+ 369 |             val previewSurface = Surface(surfaceTexture)
+ 370 |             val recorderSurface = recorder.surface
+ 371 | 
+ 372 |             // Create capture session with both surfaces
+ 373 |             val captureRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+ 374 |                 addTarget(previewSurface)
+ 375 |                 addTarget(recorderSurface)
+ 376 |                 // Apply zoom during recording too
+ 377 |                 if (zoomRatio > 1.0f) {
+ 378 |                     set(CaptureRequest.SCALER_CROP_REGION, getCropRegion())
+ 379 |                 }
+ 380 |             }
+ 381 | 
+ 382 |             cameraDevice?.createCaptureSession(
+ 383 |                 listOf(previewSurface, recorderSurface),
+ 384 |                 object : CameraCaptureSession.StateCallback() {
+ 385 |                     override fun onConfigured(session: CameraCaptureSession) {
+ 386 |                         captureSession = session
+ 387 |                         try {
+ 388 |                             captureRequestBuilder.build().let { request ->
+ 389 |                                 session.setRepeatingRequest(request, null, backgroundHandler)
+ 390 |                             }
+ 391 |                             // Start recording
+ 392 |                             Handler(context.mainLooper).post {
+ 393 |                                 try {
+ 394 |                                     recorder.start()
+ 395 |                                     isRecording = true
+ 396 |                                     currentVideoPath = outputPath
+ 397 |                                     Log.d(TAG, "Recording started successfully: $outputPath")
+ 398 |                                 } catch (e: Exception) {
+ 399 |                                     Log.e(TAG, "mediaRecorder.start() failed", e)
+ 400 |                                     Handler(context.mainLooper).post {
+ 401 |                                         android.widget.Toast.makeText(context, "录制启动失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+ 402 |                                     }
+ 403 |                                 }
+ 404 |                             }
+ 405 |                         } catch (e: Exception) {
+ 406 |                             Log.e(TAG, "Failed to set repeating request for recording", e)
+ 407 |                         }
+ 408 |                     }
+ 409 | 
+ 410 |                     override fun onConfigureFailed(session: CameraCaptureSession) {
+ 411 |                         Log.e(TAG, "Recording session configuration FAILED")
+ 412 |                         Handler(context.mainLooper).post {
+ 413 |                             android.widget.Toast.makeText(context, "录制会话配置失败", android.widget.Toast.LENGTH_LONG).show()
+ 414 |                         }
+ 415 |                     }
+ 416 |                 },
+ 417 |                 backgroundHandler
+ 418 |             )
+ 419 | 
+ 420 |             return true
+ 421 | 
+ 422 |         } catch (e: Exception) {
+ 423 |             Log.e(TAG, "Error starting recording", e)
+ 424 |             Handler(context.mainLooper).post {
+ 425 |                 android.widget.Toast.makeText(context, "录制启动异常: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+ 426 |             }
+ 427 |             return false
+ 428 |         }
+ 429 |     }
+ 430 | 
+ 431 |     fun stopRecording() {
+ 432 |         if (!isRecording) return
+ 433 |         isRecording = false
+ 434 | 
+ 435 |         val savedPath = currentVideoPath
+ 436 | 
+ 437 |         try {
+ 438 |             mediaRecorder?.apply {
+ 439 |                 stop()
+ 440 |                 release()
+ 441 |             }
+ 442 |             mediaRecorder = null
+ 443 |         } catch (e: Exception) {
+ 444 |             Log.e(TAG, "Error stopping mediaRecorder", e)
+ 445 |             try {
+ 446 |                 mediaRecorder?.release()
+ 447 |                 mediaRecorder = null
+ 448 |             } catch (_: Exception) {}
+ 449 |         }
+ 450 | 
+ 451 |         // Save to gallery so it's visible in album
+ 452 |         if (savedPath != null) {
+ 453 |             saveVideoToGallery(savedPath)
+ 454 |         }
+ 455 | 
+ 456 |         // Restart preview
+ 457 |         try {
+ 458 |             startPreview()
+ 459 |         } catch (e: Exception) {
+ 460 |             Log.e(TAG, "Error restarting preview after recording", e)
+ 461 |         }
+ 462 | 
+ 463 |         Log.d(TAG, "Recording stopped. File: $savedPath")
+ 464 | 
+ 465 |         // Notify callback
+ 466 |         onRecordingStopped?.invoke(savedPath)
+ 467 |     }
+ 468 | 
+ 469 |     private fun saveVideoToGallery(filePath: String) {
+ 470 |         try {
+ 471 |             val file = java.io.File(filePath)
+ 472 |             if (!file.exists()) {
+ 473 |                 Log.e(TAG, "Video file does not exist: $filePath")
+ 474 |                 return
+ 475 |             }
+ 476 | 
+ 477 |             val values = ContentValues().apply {
+ 478 |                 put(MediaStore.Video.Media.TITLE, file.name)
+ 479 |                 put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
+ 480 |                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+ 481 |                 put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
+ 482 |                 put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis())
+ 483 |                 put(MediaStore.Video.Media.SIZE, file.length())
+ 484 |             }
+ 485 | 
+ 486 |             val uri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+ 487 |             if (uri != null) {
+ 488 |                 context.contentResolver.openOutputStream(uri)?.use { output ->
+ 489 |                     java.io.FileInputStream(file).use { input ->
+ 490 |                         input.copyTo(output)
+ 491 |                     }
+ 492 |                 }
+ 493 |                 Log.d(TAG, "Video saved to gallery: $uri")
+ 494 |                 Handler(context.mainLooper).post {
+ 495 |                     android.widget.Toast.makeText(context, "视频已保存到相册", android.widget.Toast.LENGTH_LONG).show()
+ 496 |                 }
+ 497 |             } else {
+ 498 |                 Log.e(TAG, "Failed to insert video into MediaStore")
+ 499 |             }
+ 500 |         } catch (e: Exception) {
+ 501 |             Log.e(TAG, "Error saving video to gallery", e)
+ 502 |             Handler(context.mainLooper).post {
+ 503 |                 android.widget.Toast.makeText(context, "视频保存到相册失败，文件在: $filePath", android.widget.Toast.LENGTH_LONG).show()
+ 504 |             }
+ 505 |         }
+ 506 |     }
+ 507 | 
+ 508 |     fun close() {
+ 509 |         try {
+ 510 |             if (isRecording) {
+ 511 |                 stopRecording()
+ 512 |             }
+ 513 |             captureSession?.close()
+ 514 |             captureSession = null
+ 515 |             cameraDevice?.close()
+ 516 |             cameraDevice = null
+ 517 |             isOpened = false
+ 518 |             mediaRecorder?.release()
+ 519 |             mediaRecorder = null
+ 520 |             stopBackgroundThread()
+ 521 |         } catch (e: Exception) {
+ 522 |             Log.e(TAG, "Error closing camera", e)
+ 523 |         }
+ 524 |     }
+ 525 | }
+ 526 | 
+ 527 | // ============ MainActivity.kt ============
+ 528 | 
+ 529 | package com.teleprompter.app
+ 530 | 
+ 531 | import android.content.pm.PackageManager
+ 532 | import android.os.Build
+ 533 | import android.os.Bundle
+ 534 | import android.os.Handler
+ 535 | import android.os.Looper
+ 536 | import android.view.TextureView
+ 537 | import android.view.View
+ 538 | import android.widget.*
+ 539 | import androidx.appcompat.app.AppCompatActivity
+ 540 | import androidx.core.app.ActivityCompat
+ 541 | import androidx.core.content.ContextCompat
+ 542 | import android.view.ViewTreeObserver
+ 543 | import java.io.File
+ 544 | import java.text.SimpleDateFormat
+ 545 | import java.util.*
+ 546 | import kotlin.math.abs
+ 547 | 
+ 548 | 
+ 549 | class MainActivity : AppCompatActivity() {
+ 550 | 
+ 551 |     // Views
+ 552 |     private lateinit var cameraPreview: TextureView
+ 553 |     private lateinit var teleprompterScroll: ScrollView
+ 554 |     private lateinit var teleprompterText: TextView
+ 555 |     private lateinit var topBar: LinearLayout
+ 556 |     private lateinit var bottomBar: LinearLayout
+ 557 |     private lateinit var editPanel: LinearLayout
+ 558 |     private lateinit var editText: EditText
+ 559 |     private lateinit var btnRecord: ImageButton
+ 560 |     private lateinit var btnEdit: ImageButton
+ 561 |     private lateinit var btnPlayPause: ImageButton
+ 562 |     private lateinit var btnReset: ImageButton
+ 563 |     private lateinit var btnFontUp: ImageButton
+ 564 |     private lateinit var btnFontDown: ImageButton
+ 565 |     private lateinit var btnOpacityUp: ImageButton
+ 566 |     private lateinit var btnOpacityDown: ImageButton
+ 567 |     private lateinit var btnZoomIn: ImageButton
+ 568 |     private lateinit var btnZoomOut: ImageButton
+ 569 |     private lateinit var txtZoom: TextView
+ 570 |     private lateinit var btnConfirmEdit: Button
+ 571 |     private lateinit var btnCancelEdit: Button
+ 572 |     private lateinit var seekSpeed: SeekBar
+ 573 |     private lateinit var txtTimer: TextView
+ 574 | 
+ 575 |     // Camera & Recording
+ 576 |     private var cameraHelper: CameraHelper? = null
+ 577 |     private var isRecording = false
+ 578 |     private var recordingStartTime = 0L
+ 579 |     private var timerHandler: Handler? = null
+ 580 |     private var timerRunnable: Runnable? = null
+ 581 | 
+ 582 |     // Teleprompter state
+ 583 |     private var fontSize = 22f
+ 584 |     private var textOpacity = 80  // 0-100 percent
+ 585 |     private var scrollSpeed = 3
+ 586 |     private var isScrolling = false
+ 587 |     private var scrollHandler: Handler? = null
+ 588 |     private var scrollRunnable: Runnable? = null
+ 589 | 
+ 590 |     // Zoom state — default 1.4x to reduce wide-angle distortion
+ 591 |     // Front camera wide-angle (2-3mm equiv) causes noticeable face distortion at close range.
+ 592 |     // 1.4x zoom crops edges, simulates ~4mm focal length, much more natural.
+ 593 |     private var currentZoom = 1.4f
+ 594 | 
+ 595 |     // Default teleprompter content
+ 596 |     private var teleprompterContent = "欢迎使用提词器！\n\n请点击编辑按钮，粘贴您要提词的内容。\n\n录制时，提词文字会在此处滚动显示，帮助您自然地面对镜头讲话。\n\n您可以调节：\n- 文字大小（字体按钮）\n- 滚动速度（速度滑块）\n- 文字透明度（透明度按钮）\n\n开始录制后，控制栏会自动隐藏，轻触屏幕可重新显示。"
+ 597 | 
+ 598 |     override fun onCreate(savedInstanceState: Bundle?) {
+ 599 |         super.onCreate(savedInstanceState)
+ 600 |         setContentView(R.layout.activity_main)
+ 601 | 
+ 602 |         initViews()
+ 603 |         checkPermissionsAndStart()
+ 604 |         setupControls()
+ 605 |     }
+ 606 | 
+ 607 |     private fun initViews() {
+ 608 |         cameraPreview = findViewById(R.id.cameraPreview)
+ 609 |         teleprompterScroll = findViewById(R.id.teleprompterScroll)
+ 610 |         teleprompterText = findViewById(R.id.teleprompterText)
+ 611 |         topBar = findViewById(R.id.topBar)
+ 612 |         bottomBar = findViewById(R.id.bottomBar)
+ 613 |         editPanel = findViewById(R.id.editPanel)
+ 614 |         editText = findViewById(R.id.editText)
+ 615 |         btnRecord = findViewById(R.id.btnRecord)
+ 616 |         btnEdit = findViewById(R.id.btnEdit)
+ 617 |         btnPlayPause = findViewById(R.id.btnPlayPause)
+ 618 |         btnReset = findViewById(R.id.btnReset)
+ 619 |         btnFontUp = findViewById(R.id.btnFontUp)
+ 620 |         btnFontDown = findViewById(R.id.btnFontDown)
+ 621 |         btnOpacityUp = findViewById(R.id.btnOpacityUp)
+ 622 |         btnOpacityDown = findViewById(R.id.btnOpacityDown)
+ 623 |         btnZoomIn = findViewById(R.id.btnZoomIn)
+ 624 |         btnZoomOut = findViewById(R.id.btnZoomOut)
+ 625 |         txtZoom = findViewById(R.id.txtZoom)
+ 626 |         btnConfirmEdit = findViewById(R.id.btnConfirmEdit)
+ 627 |         btnCancelEdit = findViewById(R.id.btnCancelEdit)
+ 628 |         seekSpeed = findViewById(R.id.seekSpeed)
+ 629 |         txtTimer = findViewById(R.id.txtTimer)
+ 630 | 
+ 631 |         // Set initial teleprompter text
+ 632 |         updateTeleprompterDisplay()
+ 633 |     }
+ 634 | 
+ 635 |     private fun updateTeleprompterDisplay() {
+ 636 |         teleprompterText.text = teleprompterContent
+ 637 |         teleprompterText.textSize = fontSize
+ 638 |         val alpha = (textOpacity * 255 / 100).coerceIn(0, 255)
+ 639 |         teleprompterText.setTextColor(android.graphics.Color.argb(alpha, 255, 255, 255))
+ 640 |         teleprompterText.paint.setShadowLayer(3f, 1f, 1f, android.graphics.Color.argb(alpha, 0, 0, 0))
+ 641 |     }
+ 642 | 
+ 643 |     private fun checkPermissionsAndStart() {
+ 644 |         val corePermissions = mutableListOf(
+ 645 |             "android.permission.CAMERA",
+ 646 |             "android.permission.RECORD_AUDIO"
+ 647 |         )
+ 648 |         if (Build.VERSION.SDK_INT <= 28) {
+ 649 |             corePermissions.add("android.permission.WRITE_EXTERNAL_STORAGE")
+ 650 |         }
+ 651 | 
+ 652 |         val needed = corePermissions.filter {
+ 653 |             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+ 654 |         }
+ 655 | 
+ 656 |         if (needed.isNotEmpty()) {
+ 657 |             ActivityCompat.requestPermissions(this, needed.toTypedArray(), 100)
+ 658 |         } else {
+ 659 |             startCamera()
+ 660 |         }
+ 661 |     }
+ 662 | 
+ 663 |     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+ 664 |         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+ 665 |         if (requestCode == 100) {
+ 666 |             val cameraGranted = ContextCompat.checkSelfPermission(this, "android.permission.CAMERA") == PackageManager.PERMISSION_GRANTED
+ 667 |             val audioGranted = ContextCompat.checkSelfPermission(this, "android.permission.RECORD_AUDIO") == PackageManager.PERMISSION_GRANTED
+ 668 |             if (cameraGranted && audioGranted) {
+ 669 |                 startCamera()
+ 670 |             } else {
+ 671 |                 Toast.makeText(this, "需要摄像头和麦克风权限才能使用", Toast.LENGTH_LONG).show()
+ 672 |             }
+ 673 |         }
+ 674 |     }
+ 675 | 
+ 676 |     private fun startCamera() {
+ 677 |         if (cameraHelper != null) {
+ 678 |             cameraHelper?.close()
+ 679 |         }
+ 680 |         cameraHelper = CameraHelper(this, cameraPreview)
+ 681 | 
+ 682 |         // Set default zoom to reduce wide-angle distortion
+ 683 |         // Will be applied when preview starts
+ 684 |         currentZoom = 1.4f
+ 685 | 
+ 686 |         // Adjust TextureView aspect ratio to match camera preview
+ 687 |         // This prevents the preview from being stretched/distorted
+ 688 |         adjustPreviewAspectRatio()
+ 689 | 
+ 690 |         if (cameraPreview.isAvailable) {
+ 691 |             // Surface already ready, open camera immediately
+ 692 |             cameraHelper?.openFrontCamera()
+ 693 |             // Apply zoom after camera opens (delayed to ensure camera is ready)
+ 694 |             cameraPreview.postDelayed({
+ 695 |                 cameraHelper?.setZoom(currentZoom)
+ 696 |             }, 500)
+ 697 |         } else {
+ 698 |             // Wait for surface
+ 699 |             cameraPreview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+ 700 |                 override fun onSurfaceTextureAvailable(surface: android.graphics.SurfaceTexture, width: Int, height: Int) {
+ 701 |                     cameraHelper?.openFrontCamera()
+ 702 |                     cameraPreview.postDelayed({
+ 703 |                         cameraHelper?.setZoom(currentZoom)
+ 704 |                     }, 500)
+ 705 |                 }
+ 706 |                 override fun onSurfaceTextureSizeChanged(surface: android.graphics.SurfaceTexture, width: Int, height: Int) {
+ 707 |                     cameraHelper?.updatePreview()
+ 708 |                     adjustPreviewAspectRatio()
+ 709 |                 }
+ 710 |                 override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture): Boolean {
+ 711 |                     cameraHelper?.close()
+ 712 |                     return true
+ 713 |                 }
+ 714 |                 override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) {}
+ 715 |             }
+ 716 |         }
+ 717 |     }
+ 718 | 
+ 719 |     /**
+ 720 |      * Adjust the TextureView's dimensions to match the camera's portrait aspect ratio.
+ 721 |      * Without this, the full-screen TextureView stretches the camera preview to fill
+ 722 |      * the screen, causing the person to appear stretched/distorted.
+ 723 |      * 
+ 724 |      * We fit the preview to fill the screen width, and adjust the height to match
+ 725 |      * the camera's portrait aspect ratio. If the calculated height is taller than the
+ 726 |      * screen, we fill the screen entirely (camera aspect ratio is very close to screen ratio,
+ 727 |      * so any slight mismatch is negligible). The key is ensuring the buffer ratio matches.
+ 728 |      */
+ 729 |     private fun adjustPreviewAspectRatio() {
+ 730 |         val helper = cameraHelper ?: return
+ 731 |         val portraitW = helper.portraitWidth
+ 732 |         val portraitH = helper.portraitHeight
+ 733 |         if (portraitW <= 0 || portraitH <= 0) return
+ 734 | 
+ 735 |         cameraPreview.post {
+ 736 |             val container = cameraPreview.parent as? android.view.ViewGroup ?: return@post
+ 737 |             val containerW = container.width
+ 738 |             val containerH = container.height
+ 739 |             if (containerW <= 0 || containerH <= 0) return@post
+ 740 | 
+ 741 |             // Camera portrait aspect ratio (e.g. 1080:1920 = 9:16)
+ 742 |             val cameraRatio = portraitW.toFloat() / portraitH.toFloat()
+ 743 |             // Container aspect ratio
+ 744 |             val containerRatio = containerW.toFloat() / containerH.toFloat()
+ 745 | 
+ 746 |             val params = cameraPreview.layoutParams
+ 747 |             if (abs(containerRatio - cameraRatio) < 0.01f) {
+ 748 |                 // Ratios match closely enough, use match_parent
+ 749 |                 // No adjustment needed
+ 750 |             } else {
+ 751 |                 // Fit width to container, calculate height from camera ratio
+ 752 |                 val previewW = containerW
+ 753 |                 val previewH = (containerW / cameraRatio).toInt()
+ 754 |                 params.width = previewW
+ 755 |                 params.height = previewH.coerceAtMost(containerH)
+ 756 |                 cameraPreview.layoutParams = params
+ 757 |             }
+ 758 |         }
+ 759 |     }
+ 760 | 
+ 761 |     private fun setupControls() {
+ 762 |         // Record button
+ 763 |         btnRecord.setOnClickListener {
+ 764 |             if (isRecording) {
+ 765 |                 stopRecording()
+ 766 |             } else {
+ 767 |                 startRecording()
+ 768 |             }
+ 769 |         }
+ 770 | 
+ 771 |         // Edit button
+ 772 |         btnEdit.setOnClickListener {
+ 773 |             showEditPanel()
+ 774 |         }
+ 775 | 
+ 776 |         // Font size controls
+ 777 |         btnFontUp.setOnClickListener {
+ 778 |             fontSize = (fontSize + 2).coerceAtMost(40f)
+ 779 |             updateTeleprompterDisplay()
+ 780 |         }
+ 781 |         btnFontDown.setOnClickListener {
+ 782 |             fontSize = (fontSize - 2).coerceAtLeast(12f)
+ 783 |             updateTeleprompterDisplay()
+ 784 |         }
+ 785 | 
+ 786 |         // Opacity controls
+ 787 |         btnOpacityUp.setOnClickListener {
+ 788 |             textOpacity = (textOpacity + 10).coerceAtMost(100)
+ 789 |             updateTeleprompterDisplay()
+ 790 |             Toast.makeText(this, "透明度: ${textOpacity}%", Toast.LENGTH_SHORT).show()
+ 791 |         }
+ 792 |         btnOpacityDown.setOnClickListener {
+ 793 |             textOpacity = (textOpacity - 10).coerceAtLeast(20)
+ 794 |             updateTeleprompterDisplay()
+ 795 |             Toast.makeText(this, "透明度: ${textOpacity}%", Toast.LENGTH_SHORT).show()
+ 796 |         }
+ 797 | 
+ 798 |         // Zoom controls — adjust focal length to reduce wide-angle distortion
+ 799 |         btnZoomIn.setOnClickListener {
+ 800 |             val maxZ = cameraHelper?.maxZoomRatio ?: 5.0f
+ 801 |             currentZoom = (currentZoom + 0.2f).coerceAtMost(maxZ)
+ 802 |             cameraHelper?.setZoom(currentZoom)
+ 803 |             txtZoom.text = String.format("%.1fx", currentZoom)
+ 804 |             Toast.makeText(this, "缩放: ${String.format("%.1f", currentZoom)}x", Toast.LENGTH_SHORT).show()
+ 805 |         }
+ 806 |         btnZoomOut.setOnClickListener {
+ 807 |             currentZoom = (currentZoom - 0.2f).coerceAtLeast(1.0f)
+ 808 |             cameraHelper?.setZoom(currentZoom)
+ 809 |             txtZoom.text = String.format("%.1fx", currentZoom)
+ 810 |             Toast.makeText(this, "缩放: ${String.format("%.1f", currentZoom)}x", Toast.LENGTH_SHORT).show()
+ 811 |         }
+ 812 | 
+ 813 |         // Scroll speed
+ 814 |         seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+ 815 |             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+ 816 |                 scrollSpeed = progress.coerceAtLeast(1)
+ 817 |             }
+ 818 |             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+ 819 |             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+ 820 |         })
+ 821 | 
+ 822 |         // Play/Pause scroll
+ 823 |         btnPlayPause.setOnClickListener {
+ 824 |             if (isScrolling) {
+ 825 |                 pauseScroll()
+ 826 |             } else {
+ 827 |                 startScroll()
+ 828 |             }
+ 829 |         }
+ 830 | 
+ 831 |         // Reset scroll
+ 832 |         btnReset.setOnClickListener {
+ 833 |             teleprompterScroll.smoothScrollTo(0, 0)
+ 834 |             pauseScroll()
+ 835 |         }
+ 836 | 
+ 837 |         // Edit panel
+ 838 |         btnConfirmEdit.setOnClickListener {
+ 839 |             teleprompterContent = editText.text.toString()
+ 840 |             updateTeleprompterDisplay()
+ 841 |             hideEditPanel()
+ 842 |         }
+ 843 |         btnCancelEdit.setOnClickListener {
+ 844 |             hideEditPanel()
+ 845 |         }
+ 846 | 
+ 847 |         // Tap to show/hide controls during recording
+ 848 |         cameraPreview.setOnClickListener {
+ 849 |             if (isRecording) {
+ 850 |                 toggleControlsVisibility()
+ 851 |             }
+ 852 |         }
+ 853 | 
+ 854 |         // Long press on teleprompter area to show controls during recording
+ 855 |         teleprompterScroll.setOnTouchListener { v, event ->
+ 856 |             if (isRecording) {
+ 857 |                 toggleControlsVisibility()
+ 858 |             }
+ 859 |             v.performClick()
+ 860 |         }
+ 861 |     }
+ 862 | 
+ 863 |     private fun showEditPanel() {
+ 864 |         editText.setText(teleprompterContent)
+ 865 |         editPanel.visibility = View.VISIBLE
+ 866 |         topBar.visibility = View.GONE
+ 867 |         bottomBar.visibility = View.GONE
+ 868 |     }
+ 869 | 
+ 870 |     private fun hideEditPanel() {
+ 871 |         editPanel.visibility = View.GONE
+ 872 |         topBar.visibility = View.VISIBLE
+ 873 |         bottomBar.visibility = View.VISIBLE
+ 874 |     }
+ 875 | 
+ 876 |     // ==================== Recording ====================
+ 877 | 
+ 878 |     private fun startRecording() {
+ 879 |         if (cameraHelper == null) {
+ 880 |             Toast.makeText(this, "摄像头未就绪，请稍候", Toast.LENGTH_SHORT).show()
+ 881 |             return
+ 882 |         }
+ 883 | 
+ 884 |         val videoFile = getOutputFile()
+ 885 |         val started = cameraHelper?.startRecording(videoFile.absolutePath)
+ 886 |         if (started == true) {
+ 887 |             isRecording = true
+ 888 |             btnRecord.setImageDrawable(ContextCompat.getDrawable(this, R.drawable.ic_stop))
+ 889 |             btnRecord.contentDescription = "停止录制"
+ 890 |             recordingStartTime = System.currentTimeMillis()
+ 891 |             startTimer()
+ 892 |             startScroll()
+ 893 |             // Dim controls after a delay
+ 894 |             Handler(Looper.getMainLooper()).postDelayed({
+ 895 |                 if (isRecording) {
+ 896 |                     topBar.visibility = View.GONE
+ 897 |                     bottomBar.visibility = View.GONE
+ 898 |                 }
+ 899 |             }, 3000)
+ 900 |         } else {
+ 901 |             Toast.makeText(this, "录制启动失败，请重试", Toast.LENGTH_SHORT).show()
+ 902 |         }
+ 903 |     }
+ 904 | 
+ 905 |     private fun stopRecording() {
+ 906 |         cameraHelper?.stopRecording()
+ 907 |         isRecording = false
+ 908 |         btnRecord.setImageDrawable(ContextCompat.getDrawable(this, R.drawable.ic_record))
+ 909 |         btnRecord.contentDescription = "开始录制"
+ 910 |         stopTimer()
+ 911 |         pauseScroll()
+ 912 |         topBar.visibility = View.VISIBLE
+ 913 |         bottomBar.visibility = View.VISIBLE
+ 914 |     }
+ 915 | 
+ 916 |     private fun getOutputFile(): File {
+ 917 |         val dir = File(getExternalFilesDir(null), "TeleprompterVideos")
+ 918 |         if (!dir.exists()) dir.mkdirs()
+ 919 |         val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+ 920 |         return File(dir, "VID_${dateFormat.format(Date())}.mp4")
+ 921 |     }
+ 922 | 
+ 923 |     // ==================== Timer ====================
+ 924 | 
+ 925 |     private fun startTimer() {
+ 926 |         txtTimer.visibility = View.VISIBLE
+ 927 |         timerHandler = Handler(Looper.getMainLooper())
+ 928 |         timerRunnable = object : Runnable {
+ 929 |             override fun run() {
+ 930 |                 if (isRecording) {
+ 931 |                     val elapsed = (System.currentTimeMillis() - recordingStartTime) / 1000
+ 932 |                     val min = elapsed / 60
+ 933 |                     val sec = elapsed % 60
+ 934 |                     txtTimer.text = String.format("%02d:%02d", min, sec)
+ 935 |                     timerHandler?.postDelayed(this, 500)
+ 936 |                 }
+ 937 |             }
+ 938 |         }
+ 939 |         timerRunnable?.let { timerHandler?.post(it) }
+ 940 |     }
+ 941 | 
+ 942 |     private fun stopTimer() {
+ 943 |         timerRunnable?.let { timerHandler?.removeCallbacks(it) }
+ 944 |         txtTimer.visibility = View.GONE
+ 945 |     }
+ 946 | 
+ 947 |     // ==================== Auto Scroll ====================
+ 948 | 
+ 949 |     private fun startScroll() {
+ 950 |         isScrolling = true
+ 951 |         btnPlayPause.setImageDrawable(ContextCompat.getDrawable(this, R.drawable.ic_reset))
+ 952 |         scrollHandler = Handler(Looper.getMainLooper())
+ 953 |         scrollRunnable = object : Runnable {
+ 954 |             override fun run() {
+ 955 |                 if (isScrolling) {
+ 956 |                     teleprompterScroll.smoothScrollBy(0, scrollSpeed)
+ 957 |                     scrollHandler?.postDelayed(this, 50)
+ 958 |                 }
+ 959 |             }
+ 960 |         }
+ 961 |         scrollRunnable?.let { scrollHandler?.post(it) }
+ 962 |     }
+ 963 | 
+ 964 |     private fun pauseScroll() {
+ 965 |         isScrolling = false
+ 966 |         btnPlayPause.setImageDrawable(ContextCompat.getDrawable(this, R.drawable.ic_forward))
+ 967 |         scrollRunnable?.let { scrollHandler?.removeCallbacks(it) }
+ 968 |     }
+ 969 | 
+ 970 |     // ==================== Controls visibility ====================
+ 971 | 
+ 972 |     private var controlsVisible = true
+ 973 |     private fun toggleControlsVisibility() {
+ 974 |         controlsVisible = !controlsVisible
+ 975 |         topBar.visibility = if (controlsVisible) View.VISIBLE else View.GONE
+ 976 |         bottomBar.visibility = if (controlsVisible) View.VISIBLE else View.GONE
+ 977 |     }
+ 978 | 
+ 979 |     // ==================== Lifecycle ====================
+ 980 | 
+ 981 |     override fun onDestroy() {
+ 982 |         super.onDestroy()
+ 983 |         if (isRecording) {
+ 984 |             stopRecording()
+ 985 |         }
+ 986 |         cameraHelper?.close()
+ 987 |         timerRunnable?.let { timerHandler?.removeCallbacks(it) }
+ 988 |         scrollRunnable?.let { scrollHandler?.removeCallbacks(it) }
+ 989 |     }
+ 990 | 
+ 991 |     override fun onPause() {
+ 992 |         super.onPause()
+ 993 |         if (isRecording) {
+ 994 |             // Don't stop recording on pause - keep recording in background
+ 995 |         }
+ 996 |         cameraHelper?.close()
+ 997 |     }
+ 998 | 
+ 999 |     override fun onResume() {
+1000 |         super.onResume()
+1001 |         if (cameraHelper == null || !cameraHelper!!.isOpened) {
+1002 |             startCamera()
+1003 |         }
+1004 |     }
+1005 | }
+1006 | 
+1007 | // ============ PrivacyConsentActivity.kt ============
+1008 | 
+1009 | package com.teleprompter.app
+1010 | 
+1011 | import android.app.AlertDialog
+1012 | import android.content.Intent
+1013 | import android.net.Uri
+1014 | import android.os.Bundle
+1015 | import androidx.appcompat.app.AppCompatActivity
+1016 | 
+1017 | /**
+1018 |  * 隐私政策合规确认页
+1019 |  * 国内应用商店要求：首次启动时展示隐私政策，用户同意后才能使用App
+1020 |  */
+1021 | class PrivacyConsentActivity : AppCompatActivity() {
+1022 | 
+1023 |     companion object {
+1024 |         const val EXTRA_PRIVACY_AGREED = "privacy_agreed"
+1025 |         private const val PREFS_NAME = "teleprompter_prefs"
+1026 |         private const val KEY_PRIVACY_AGREED = "privacy_agreed"
+1027 |         private const val KEY_PRIVACY_VERSION = "privacy_version"
+1028 |         private const val CURRENT_PRIVACY_VERSION = 1
+1029 |     }
+1030 | 
+1031 |     override fun onCreate(savedInstanceState: Bundle?) {
+1032 |         super.onCreate(savedInstanceState)
+1033 | 
+1034 |         // 如果已经同意过当前版本的隐私政策，直接跳转
+1035 |         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+1036 |         val agreedVersion = prefs.getInt(KEY_PRIVACY_VERSION, 0)
+1037 |         if (prefs.getBoolean(KEY_PRIVACY_AGREED, false) && agreedVersion >= CURRENT_PRIVACY_VERSION) {
+1038 |             proceedToMain()
+1039 |             return
+1040 |         }
+1041 | 
+1042 |         showPrivacyDialog()
+1043 |     }
+1044 | 
+1045 |     private fun showPrivacyDialog() {
+1046 |         AlertDialog.Builder(this)
+1047 |             .setTitle("隐私政策与用户协议")
+1048 |             .setMessage(
+1049 |                 "欢迎使用「提词器」！\n\n" +
+1050 |                 "在您使用本应用之前，请仔细阅读我们的隐私政策：\n\n" +
+1051 |                 "• 本应用不收集任何个人数据\n" +
+1052 |                 "• 不上传任何信息到服务器\n" +
+1053 |                 "• 不包含任何广告或追踪SDK\n" +
+1054 |                 "• 摄像头和麦克风仅用于视频录制\n" +
+1055 |                 "• 所有数据仅保存在您的设备本地\n\n" +
+1056 |                 "点击「同意」即表示您已阅读并同意隐私政策。"
+1057 |             )
+1058 |             .setPositiveButton("同意并继续") { _, _ ->
+1059 |                 // 保存用户同意状态
+1060 |                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+1061 |                     .putBoolean(KEY_PRIVACY_AGREED, true)
+1062 |                     .putInt(KEY_PRIVACY_VERSION, CURRENT_PRIVACY_VERSION)
+1063 |                     .apply()
+1064 |                 proceedToMain()
+1065 |             }
+1066 |             .setNeutralButton("查看完整隐私政策") { _, _ ->
+1067 |                 // 打开隐私政策网页
+1068 |                 val privacyUrl = "https://teleprompter-app.github.io/privacy_policy.html"
+1069 |                 try {
+1070 |                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(privacyUrl)))
+1071 |                 } catch (e: Exception) {
+1072 |                     // 没有浏览器时，显示本地版本
+1073 |                 }
+1074 |                 // 重新显示弹窗让用户选择同意
+1075 |                 showPrivacyDialog()
+1076 |             }
+1077 |             .setNegativeButton("不同意") { _, _ ->
+1078 |                 // 不同意则退出应用
+1079 |                 finishAffinity()
+1080 |             }
+1081 |             .setCancelable(false)
+1082 |             .show()
+1083 |     }
+1084 | 
+1085 |     private fun proceedToMain() {
+1086 |         val intent = Intent(this, MainActivity::class.java)
+1087 |         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+1088 |         startActivity(intent)
+1089 |         finish()
+1090 |     }
+1091 | }
+1092 | 
+1093 | // ============ ic_edit.xml ============
+1094 | 
+1095 | <?xml version="1.0" encoding="utf-8"?>
+1096 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1097 |     android:width="24dp"
+1098 |     android:height="24dp"
+1099 |     android:viewportWidth="24"
+1100 |     android:viewportHeight="24">
+1101 |     <path
+1102 |         android:fillColor="#FFFFFF"
+1103 |         android:pathData="M3,17.25V21h3.75L17.81,9.94l-3.75,-3.75L3,17.25zM20.71,7.04c0.39,-0.39 0.39,-1.02 0,-1.41l-2.34,-2.34c-0.39,-0.39 -1.02,-0.39 -1.41,0l-1.83,1.83 3.75,3.75 1.83,-1.83z"/>
+1104 | </vector>
+1105 | 
+1106 | // ============ ic_font_down.xml ============
+1107 | 
+1108 | <?xml version="1.0" encoding="utf-8"?>
+1109 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1110 |     android:width="24dp"
+1111 |     android:height="24dp"
+1112 |     android:viewportWidth="24"
+1113 |     android:viewportHeight="24">
+1114 |     <!-- Font size down arrow -->
+1115 |     <path
+1116 |         android:fillColor="#FFFFFF"
+1117 |         android:pathData="M4,18h4v-2H4v2zM2,6h8v2H2V6zM4,14h6v2H4v-2zM14.5,9l2.5,-3 2.5,3h-5zM20,15h-8l4,-5 4,5z"/>
+1118 | </vector>
+1119 | 
+1120 | // ============ ic_font_up.xml ============
+1121 | 
+1122 | <?xml version="1.0" encoding="utf-8"?>
+1123 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1124 |     android:width="24dp"
+1125 |     android:height="24dp"
+1126 |     android:viewportWidth="24"
+1127 |     android:viewportHeight="24">
+1128 |     <!-- Font size up arrow -->
+1129 |     <path
+1130 |         android:fillColor="#FFFFFF"
+1131 |         android:pathData="M4,18h4v-2H4v2zM2,6h8v2H2V6zM4,14h6v2H4v-2zM14.5,12l2.5,3 2.5,-3h-5zM20,6h-8l4,5 4,-5z"/>
+1132 | </vector>
+1133 | 
+1134 | // ============ ic_forward.xml ============
+1135 | 
+1136 | <?xml version="1.0" encoding="utf-8"?>
+1137 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1138 |     android:width="24dp"
+1139 |     android:height="24dp"
+1140 |     android:viewportWidth="24"
+1141 |     android:viewportHeight="24">
+1142 |     <path
+1143 |         android:fillColor="#FFFFFF"
+1144 |         android:pathData="M10,6L8.59,7.41L13.17,12l-4.58,4.59L10,18l6,-6z"/>
+1145 | </vector>
+1146 | 
+1147 | // ============ ic_launcher_background.xml ============
+1148 | 
+1149 | <?xml version="1.0" encoding="utf-8"?>
+1150 | <shape xmlns:android="http://schemas.android.com/apk/res/android"
+1151 |     android:shape="oval">
+1152 |     <solid android:color="#FF1A1A2E"/>
+1153 |     <size android:width="108dp" android:height="108dp"/>
+1154 | </shape>
+1155 | 
+1156 | // ============ ic_launcher_foreground.xml ============
+1157 | 
+1158 | <?xml version="1.0" encoding="utf-8"?>
+1159 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1160 |     android:width="108dp"
+1161 |     android:height="108dp"
+1162 |     android:viewportWidth="108"
+1163 |     android:viewportHeight="108">
+1164 |     <!-- Blue circle background -->
+1165 |     <path
+1166 |         android:fillColor="#FF0F3460"
+1167 |         android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0"/>
+1168 |     <!-- White teleprompter icon: lines representing text -->
+1169 |     <path
+1170 |         android:fillColor="#FFFFFF"
+1171 |         android:pathData="M30,38h48v4H30z"/>
+1172 |     <path
+1173 |         android:fillColor="#FFFFFF"
+1174 |         android:pathData="M30,48h36v4H30z"/>
+1175 |     <path
+1176 |         android:fillColor="#FFFFFF"
+1177 |         android:pathData="M30,58h42v4H30z"/>
+1178 |     <path
+1179 |         android:fillColor="#FFFFFF"
+1180 |         android:pathData="M30,68h30v4H30z"/>
+1181 |     <!-- Play triangle -->
+1182 |     <path
+1183 |         android:fillColor="#FFFF4444"
+1184 |         android:pathData="M74,63l10,7 -10,7z"/>
+1185 | </vector>
+1186 | 
+1187 | // ============ ic_record.xml ============
+1188 | 
+1189 | <?xml version="1.0" encoding="utf-8"?>
+1190 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1191 |     android:width="72dp"
+1192 |     android:height="72dp"
+1193 |     android:viewportWidth="72"
+1194 |     android:viewportHeight="72">
+1195 |     <!-- Red circle (record button) -->
+1196 |     <path
+1197 |         android:fillColor="#FFFF0000"
+1198 |         android:pathData="M36,36m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0"/>
+1199 |     <!-- White inner circle -->
+1200 |     <path
+1201 |         android:fillColor="#FFFF3333"
+1202 |         android:pathData="M36,36m-24,0a24,24 0,1 1,48 0a24,24 0,1 1,-48 0"/>
+1203 | </vector>
+1204 | 
+1205 | // ============ ic_reset.xml ============
+1206 | 
+1207 | <?xml version="1.0" encoding="utf-8"?>
+1208 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1209 |     android:width="24dp"
+1210 |     android:height="24dp"
+1211 |     android:viewportWidth="24"
+1212 |     android:viewportHeight="24">
+1213 |     <path
+1214 |         android:fillColor="#FFFFFF"
+1215 |         android:pathData="M12,5V1L7,6l5,5V7c3.31,0 6,2.69 6,6s-2.69,6 -6,6 -6,-2.69 -6,-6H4c0,4.42 3.58,8 8,8s8,-3.58 8,-8 -3.58,-8 -8,-8z"/>
+1216 | </vector>
+1217 | 
+1218 | // ============ ic_revert.xml ============
+1219 | 
+1220 | <?xml version="1.0" encoding="utf-8"?>
+1221 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1222 |     android:width="24dp"
+1223 |     android:height="24dp"
+1224 |     android:viewportWidth="24"
+1225 |     android:viewportHeight="24">
+1226 |     <path
+1227 |         android:fillColor="#FFFFFF"
+1228 |         android:pathData="M15.41,7.41L14,6l-6,6 6,6 1.41,-1.41L10.83,12z"/>
+1229 | </vector>
+1230 | 
+1231 | // ============ ic_stop.xml ============
+1232 | 
+1233 | <?xml version="1.0" encoding="utf-8"?>
+1234 | <vector xmlns:android="http://schemas.android.com/apk/res/android"
+1235 |     android:width="72dp"
+1236 |     android:height="72dp"
+1237 |     android:viewportWidth="72"
+1238 |     android:viewportHeight="72">
+1239 |     <!-- White square (stop button) -->
+1240 |     <path
+1241 |         android:fillColor="#FFFF0000"
+1242 |         android:pathData="M18,18h36v36h-36z"/>
+1243 | </vector>
+1244 | 
+1245 | // ============ activity_main.xml ============
+1246 | 
+1247 | <?xml version="1.0" encoding="utf-8"?>
+1248 | <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+1249 |     android:layout_width="match_parent"
+1250 |     android:layout_height="match_parent"
+1251 |     android:background="#000000">
+1252 | 
+1253 |     <!-- Camera preview (full screen) -->
+1254 |     <TextureView
+1255 |         android:id="@+id/cameraPreview"
+1256 |         android:layout_width="match_parent"
+1257 |         android:layout_height="match_parent" />
+1258 | 
+1259 |     <!-- Teleprompter text overlay - positioned at top area near camera -->
+1260 |     <ScrollView
+1261 |         android:id="@+id/teleprompterScroll"
+1262 |         android:layout_width="match_parent"
+1263 |         android:layout_height="300dp"
+1264 |         android:layout_gravity="top"
+1265 |         android:layout_marginTop="48dp"
+1266 |         android:background="#00000000"
+1267 |         android:scrollbars="none"
+1268 |         android:overScrollMode="never">
+1269 | 
+1270 |         <TextView
+1271 |             android:id="@+id/teleprompterText"
+1272 |             android:layout_width="match_parent"
+1273 |             android:layout_height="wrap_content"
+1274 |             android:paddingStart="16dp"
+1275 |             android:paddingEnd="16dp"
+1276 |             android:paddingTop="24dp"
+1277 |             android:paddingBottom="80dp"
+1278 |             android:textColor="#FFFFFFCC"
+1279 |             android:textSize="22sp"
+1280 |             android:lineSpacingMultiplier="1.6"
+1281 |             android:fontFamily="sans-serif"
+1282 |             android:shadowColor="#FF000000"
+1283 |             android:shadowDx="1"
+1284 |             android:shadowDy="1"
+1285 |             android:shadowRadius="3" />
+1286 | 
+1287 |     </ScrollView>
+1288 | 
+1289 |     <!-- Top bar: controls -->
+1290 |     <LinearLayout
+1291 |         android:id="@+id/topBar"
+1292 |         android:layout_width="match_parent"
+1293 |         android:layout_height="wrap_content"
+1294 |         android:layout_gravity="top"
+1295 |         android:orientation="horizontal"
+1296 |         android:gravity="center_vertical"
+1297 |         android:paddingStart="12dp"
+1298 |         android:paddingEnd="12dp"
+1299 |         android:paddingTop="36dp"
+1300 |         android:paddingBottom="8dp"
+1301 |         android:background="#80000000">
+1302 | 
+1303 |         <!-- Edit button -->
+1304 |         <ImageButton
+1305 |             android:id="@+id/btnEdit"
+1306 |             android:layout_width="40dp"
+1307 |             android:layout_height="40dp"
+1308 |             android:src="@drawable/ic_edit"
+1309 |             android:background="?attr/selectableItemBackgroundBorderless"
+1310 |             android:contentDescription="编辑文案"
+1311 |             android:tint="#FFFFFF" />
+1312 | 
+1313 |         <View
+1314 |             android:layout_width="0dp"
+1315 |             android:layout_height="0dp"
+1316 |             android:layout_weight="1" />
+1317 | 
+1318 |         <!-- Font size down -->
+1319 |         <ImageButton
+1320 |             android:id="@+id/btnFontDown"
+1321 |             android:layout_width="36dp"
+1322 |             android:layout_height="36dp"
+1323 |             android:src="@drawable/ic_font_down"
+1324 |             android:background="?attr/selectableItemBackgroundBorderless"
+1325 |             android:contentDescription="缩小字体"
+1326 |             android:tint="#FFFFFF" />
+1327 | 
+1328 |         <!-- Font size up -->
+1329 |         <ImageButton
+1330 |             android:id="@+id/btnFontUp"
+1331 |             android:layout_width="36dp"
+1332 |             android:layout_height="36dp"
+1333 |             android:src="@drawable/ic_font_up"
+1334 |             android:background="?attr/selectableItemBackgroundBorderless"
+1335 |             android:contentDescription="放大字体"
+1336 |             android:tint="#FFFFFF" />
+1337 | 
+1338 |         <!-- Opacity down -->
+1339 |         <ImageButton
+1340 |             android:id="@+id/btnOpacityDown"
+1341 |             android:layout_width="36dp"
+1342 |             android:layout_height="36dp"
+1343 |             android:src="@drawable/ic_revert"
+1344 |             android:background="?attr/selectableItemBackgroundBorderless"
+1345 |             android:contentDescription="降低透明度"
+1346 |             android:tint="#FFFFFF" />
+1347 | 
+1348 |         <!-- Opacity up -->
+1349 |         <ImageButton
+1350 |             android:id="@+id/btnOpacityUp"
+1351 |             android:layout_width="36dp"
+1352 |             android:layout_height="36dp"
+1353 |             android:src="@drawable/ic_forward"
+1354 |             android:background="?attr/selectableItemBackgroundBorderless"
+1355 |             android:contentDescription="提高透明度"
+1356 |             android:tint="#FFFFFF" />
+1357 | 
+1358 |         <!-- Divider -->
+1359 |         <View
+1360 |             android:layout_width="1dp"
+1361 |             android:layout_height="24dp"
+1362 |             android:layout_marginStart="8dp"
+1363 |             android:layout_marginEnd="4dp"
+1364 |             android:background="#40FFFFFF" />
+1365 | 
+1366 |         <!-- Zoom out -->
+1367 |         <ImageButton
+1368 |             android:id="@+id/btnZoomOut"
+1369 |             android:layout_width="36dp"
+1370 |             android:layout_height="36dp"
+1371 |             android:src="@drawable/ic_font_down"
+1372 |             android:background="?attr/selectableItemBackgroundBorderless"
+1373 |             android:contentDescription="缩小焦距"
+1374 |             android:tint="#FFFFFF" />
+1375 | 
+1376 |         <!-- Zoom indicator -->
+1377 |         <TextView
+1378 |             android:id="@+id/txtZoom"
+1379 |             android:layout_width="wrap_content"
+1380 |             android:layout_height="wrap_content"
+1381 |             android:text="1.4x"
+1382 |             android:textColor="#FFFFFF"
+1383 |             android:textSize="12sp"
+1384 |             android:minWidth="32dp"
+1385 |             android:gravity="center" />
+1386 | 
+1387 |         <!-- Zoom in -->
+1388 |         <ImageButton
+1389 |             android:id="@+id/btnZoomIn"
+1390 |             android:layout_width="36dp"
+1391 |             android:layout_height="36dp"
+1392 |             android:src="@drawable/ic_font_up"
+1393 |             android:background="?attr/selectableItemBackgroundBorderless"
+1394 |             android:contentDescription="放大焦距"
+1395 |             android:tint="#FFFFFF" />
+1396 | 
+1397 |     </LinearLayout>
+1398 | 
+1399 |     <!-- Bottom bar: record + scroll control -->
+1400 |     <LinearLayout
+1401 |         android:id="@+id/bottomBar"
+1402 |         android:layout_width="match_parent"
+1403 |         android:layout_height="wrap_content"
+1404 |         android:layout_gravity="bottom"
+1405 |         android:orientation="vertical"
+1406 |         android:paddingBottom="20dp"
+1407 |         android:background="#80000000">
+1408 | 
+1409 |         <!-- Scroll speed control -->
+1410 |         <LinearLayout
+1411 |             android:layout_width="match_parent"
+1412 |             android:layout_height="wrap_content"
+1413 |             android:orientation="horizontal"
+1414 |             android:gravity="center_vertical"
+1415 |             android:paddingStart="16dp"
+1416 |             android:paddingEnd="16dp">
+1417 | 
+1418 |             <TextView
+1419 |                 android:layout_width="wrap_content"
+1420 |                 android:layout_height="wrap_content"
+1421 |                 android:text="速度"
+1422 |                 android:textColor="#FFFFFF"
+1423 |                 android:textSize="14sp" />
+1424 | 
+1425 |             <SeekBar
+1426 |                 android:id="@+id/seekSpeed"
+1427 |                 android:layout_width="0dp"
+1428 |                 android:layout_height="wrap_content"
+1429 |                 android:layout_weight="1"
+1430 |                 android:max="20"
+1431 |                 android:progress="5"
+1432 |                 android:paddingStart="8dp"
+1433 |                 android:paddingEnd="8dp" />
+1434 | 
+1435 |             <!-- Play/Pause scroll -->
+1436 |             <ImageButton
+1437 |                 android:id="@+id/btnPlayPause"
+1438 |                 android:layout_width="40dp"
+1439 |                 android:layout_height="40dp"
+1440 |                 android:src="@drawable/ic_forward"
+1441 |                 android:background="?attr/selectableItemBackgroundBorderless"
+1442 |                 android:contentDescription="播放/暂停滚动"
+1443 |                 android:tint="#FFFFFF" />
+1444 | 
+1445 |             <!-- Reset scroll -->
+1446 |             <ImageButton
+1447 |                 android:id="@+id/btnReset"
+1448 |                 android:layout_width="36dp"
+1449 |                 android:layout_height="36dp"
+1450 |                 android:src="@drawable/ic_reset"
+1451 |                 android:background="?attr/selectableItemBackgroundBorderless"
+1452 |                 android:contentDescription="回到顶部"
+1453 |                 android:tint="#FFFFFF" />
+1454 | 
+1455 |         </LinearLayout>
+1456 | 
+1457 |         <!-- Record button -->
+1458 |         <LinearLayout
+1459 |             android:layout_width="match_parent"
+1460 |             android:layout_height="wrap_content"
+1461 |             android:orientation="horizontal"
+1462 |             android:gravity="center"
+1463 |             android:paddingTop="8dp">
+1464 | 
+1465 |             <ImageButton
+1466 |                 android:id="@+id/btnRecord"
+1467 |                 android:layout_width="72dp"
+1468 |                 android:layout_height="72dp"
+1469 |                 android:src="@drawable/ic_record"
+1470 |                 android:background="?attr/selectableItemBackgroundBorderless"
+1471 |                 android:contentDescription="开始录制"
+1472 |                 android:scaleType="fitCenter"
+1473 |                 android:padding="4dp" />
+1474 | 
+1475 |             <!-- Recording timer -->
+1476 |             <TextView
+1477 |                 android:id="@+id/txtTimer"
+1478 |                 android:layout_width="wrap_content"
+1479 |                 android:layout_height="wrap_content"
+1480 |                 android:layout_marginStart="16dp"
+1481 |                 android:text="00:00"
+1482 |                 android:textColor="#FFFF0000"
+1483 |                 android:textSize="18sp"
+1484 |                 android:visibility="gone" />
+1485 | 
+1486 |         </LinearLayout>
+1487 | 
+1488 |     </LinearLayout>
+1489 | 
+1490 |     <!-- Edit panel (hidden by default) -->
+1491 |     <LinearLayout
+1492 |         android:id="@+id/editPanel"
+1493 |         android:layout_width="match_parent"
+1494 |         android:layout_height="match_parent"
+1495 |         android:orientation="vertical"
+1496 |         android:background="#FF1A1A2E"
+1497 |         android:visibility="gone"
+1498 |         android:padding="16dp">
+1499 | 
+1500 |         <TextView
+1501 |             android:layout_width="wrap_content"
+1502 |             android:layout_height="wrap_content"
+1503 |             android:text="编辑提词内容"
+1504 |             android:textColor="#FFFFFF"
+1505 |             android:textSize="20sp"
+1506 |             android:textStyle="bold"
+1507 |             android:layout_marginBottom="16dp" />
+1508 | 
+1509 |         <EditText
+1510 |             android:id="@+id/editText"
+1511 |             android:layout_width="match_parent"
+1512 |             android:layout_height="0dp"
+1513 |             android:layout_weight="1"
+1514 |             android:background="#FF16213E"
+1515 |             android:gravity="top|start"
+1516 |             android:hint="在此粘贴或输入提词内容..."
+1517 |             android:textColorHint="#FFFFFF80"
+1518 |             android:textColor="#FFFFFF"
+1519 |             android:textSize="18sp"
+1520 |             android:padding="12dp"
+1521 |             android:inputType="textMultiLine|textLongMessage"
+1522 |             android:scrollbars="vertical"
+1523 |             android:overScrollMode="always" />
+1524 | 
+1525 |         <LinearLayout
+1526 |             android:layout_width="match_parent"
+1527 |             android:layout_height="wrap_content"
+1528 |             android:orientation="horizontal"
+1529 |             android:gravity="end"
+1530 |             android:layout_marginTop="12dp">
+1531 | 
+1532 |             <Button
+1533 |                 android:id="@+id/btnCancelEdit"
+1534 |                 android:layout_width="wrap_content"
+1535 |                 android:layout_height="wrap_content"
+1536 |                 android:text="取消"
+1537 |                 android:backgroundTint="#FF333355"
+1538 |                 android:textColor="#FFFFFF" />
+1539 | 
+1540 |             <Button
+1541 |                 android:id="@+id/btnConfirmEdit"
+1542 |                 android:layout_width="wrap_content"
+1543 |                 android:layout_height="wrap_content"
+1544 |                 android:text="确认"
+1545 |                 android:backgroundTint="#FF0F3460"
+1546 |                 android:textColor="#FFFFFF"
+1547 |                 android:layout_marginStart="8dp" />
+1548 | 
+1549 |         </LinearLayout>
+1550 | 
+1551 |     </LinearLayout>
+1552 | 
+1553 | </FrameLayout>
+1554 | 
+1555 | // ============ strings.xml ============
+1556 | 
+1557 | <?xml version="1.0" encoding="utf-8"?>
+1558 | <resources>
+1559 |     <string name="app_name">短视频提词器</string>
+1560 |     <string name="app_version">1.0.0</string>
+1561 | 
+1562 |     <!-- Privacy consent dialog -->
+1563 |     <string name="privacy_title">隐私政策与用户协议</string>
+1564 |     <string name="privacy_message">欢迎使用「提词器」！\n\n在您使用本应用之前，请仔细阅读我们的隐私政策：\n\n• 本应用不收集任何个人数据\n• 不上传任何信息到服务器\n• 不包含任何广告或追踪SDK\n• 摄像头和麦克风仅用于视频录制\n• 所有数据仅保存在您的设备本地\n\n点击「同意」即表示您已阅读并同意隐私政策。</string>
+1565 |     <string name="privacy_agree">同意并继续</string>
+1566 |     <string name="privacy_disagree">不同意</string>
+1567 |     <string name="privacy_view_full">查看完整隐私政策</string>
+1568 | 
+1569 |     <!-- Camera -->
+1570 |     <string name="camera_not_found">未找到前置摄像头</string>
+1571 |     <string name="camera_open_error">摄像头打开出错</string>
+1572 |     <string name="camera_not_ready">摄像头未就绪，请稍候</string>
+1573 |     <string name="camera_open_failed">打开摄像头失败</string>
+1574 | 
+1575 |     <!-- Recording -->
+1576 |     <string name="record_start_failed">录制启动失败，请重试</string>
+1577 |     <string name="record_session_failed">录制会话配置失败</string>
+1578 |     <string name="record_start_exception">录制启动异常</string>
+1579 | 
+1580 |     <!-- Zoom -->
+1581 |     <string name="zoom_format">%.1fx</string>
+1582 | 
+1583 |     <!-- Teleprompter -->
+1584 |     <string name="opacity_format">透明度: %d%%</string>
+1585 | 
+1586 |     <!-- Default teleprompter text -->
+1587 |     <string name="default_teleprompter_text">欢迎使用提词器！\n\n请点击编辑按钮，粘贴您要提词的内容。\n\n录制时，提词文字会在此处滚动显示，帮助您自然地面对镜头讲话。\n\n您可以调节：\n- 文字大小（字体按钮）\n- 滚动速度（速度滑块）\n- 文字透明度（透明度按钮）\n- 镜头缩放（缩放按钮）\n\n开始录制后，控制栏会自动隐藏，轻触屏幕可重新显示。</string>
+1588 | </resources>
+1589 | 
+1590 | // ============ themes.xml ============
+1591 | 
+1592 | <?xml version="1.0" encoding="utf-8"?>
+1593 | <resources>
+1594 |     <style name="Theme.TeleprompterApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+1595 |         <item name="colorPrimary">#FF1A1A2E</item>
+1596 |         <item name="colorPrimaryVariant">#FF16213E</item>
+1597 |         <item name="colorOnPrimary">#FFFFFFFF</item>
+1598 |         <item name="colorSecondary">#FF0F3460</item>
+1599 |         <item name="android:statusBarColor">#FF000000</item>
+1600 |         <item name="android:navigationBarColor">#FF000000</item>
+1601 |     </style>
+1602 | </resources>
+1603 | 

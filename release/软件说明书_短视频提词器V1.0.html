@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>短视频提词器 V1.0 软件说明书</title>
+<style>
+@page {
+    size: A4;
+    margin: 2.5cm;
+}
+body {
+    font-family: "SimSun", "宋体", serif;
+    font-size: 14px;
+    line-height: 1.8;
+    color: #333;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+}
+h1 {
+    text-align: center;
+    font-size: 22px;
+    border-bottom: 2px solid #333;
+    padding-bottom: 10px;
+    margin-bottom: 30px;
+}
+h2 {
+    font-size: 18px;
+    border-left: 4px solid #1a73e8;
+    padding-left: 10px;
+    margin-top: 30px;
+}
+h3 {
+    font-size: 16px;
+    margin-top: 20px;
+}
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 15px 0;
+}
+th, td {
+    border: 1px solid #666;
+    padding: 8px 12px;
+    text-align: left;
+}
+th {
+    background: #f0f0f0;
+    font-weight: bold;
+}
+li {
+    margin: 5px 0;
+    margin-left: 20px;
+}
+code {
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+}
+pre {
+    background: #f5f5f5;
+    padding: 15px;
+    border-radius: 5px;
+    overflow-x: auto;
+}
+pre code {
+    padding: 0;
+    background: none;
+}
+hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 20px 0;
+}
+p {
+    margin: 8px 0;
+}
+</style>
+</head>
+<body>
+<h1>短视频提词器 V1.0 软件说明书</h1>
+<br>
+<h2>一、软件概述</h2>
+<br>
+<p><strong>软件名称</strong>：短视频提词器  </p>
+<p><strong>版本号</strong>：V1.0  </p>
+<p><strong>开发语言</strong>：Kotlin  </p>
+<p><strong>运行平台</strong>：Android 7.0（API 24）及以上  </p>
+<p><strong>软件类型</strong>：工具类应用  </p>
+<br>
+<p>短视频提词器是一款专为自媒体创作者设计的Android应用，将前置摄像头录制与提词器功能合二为一。用户在录制口播视频时，提词文字以半透明方式悬浮在屏幕上方（靠近前摄像头位置），实现自然看词的效果，避免眼神偏移。同时提供广角畸变校正功能，让前置摄像头拍摄的画面更加自然。</p>
+<br>
+<h2>二、功能说明</h2>
+<br>
+<h3>2.1 前置摄像头高清录制</h3>
+<li>支持1080P（1920×1080）前置摄像头录制</li>
+<li>录制视频为纯净画面，不含提词文字叠加</li>
+<li>支持录制计时显示</li>
+<br>
+<h3>2.2 半透明提词器</h3>
+<li>提词文字以半透明方式悬浮在屏幕上方</li>
+<li>文字位置靠近前摄像头，看词时眼神方向自然</li>
+<li>支持从其他应用复制粘贴提词内容</li>
+<li>自动滚动，播放/暂停/回到顶部控制</li>
+<br>
+<h3>2.3 字体调节</h3>
+<li>字体大小：12sp ~ 40sp，连续可调</li>
+<li>透明度：20% ~ 100%，连续可调</li>
+<li>滚动速度：可调</li>
+<br>
+<h3>2.4 广角畸变校正</h3>
+<li>默认1.4x数字变焦，减小前置广角畸变</li>
+<li>变焦范围：1.0x ~ 3.0x，步进0.2x</li>
+<li>控制栏提供缩放按钮（🔍+/🔍-）和倍率显示</li>
+<br>
+<h3>2.5 录制控制</h3>
+<li>开始/停止录制按钮</li>
+<li>录制计时实时显示</li>
+<li>控制栏3秒自动隐藏，轻触屏幕重新显示</li>
+<br>
+<h3>2.6 隐私合规</h3>
+<li>首次启动显示隐私政策弹窗，用户需同意后方可使用</li>
+<li>不收集、不上传、不分享任何用户数据</li>
+<li>无广告、无追踪</li>
+<br>
+<h2>三、运行环境</h2>
+<br>
+<table><thead><tr>
+<th>项目</th>
+<th>要求</th>
+</tr></thead><tbody>
+<tr>
+<td>操作系统</td>
+<td>Android 7.0（API 24）及以上</td>
+</tr>
+<tr>
+<td>存储</td>
+<td>约3.5MB安装空间</td>
+</tr>
+<tr>
+<td>摄像头</td>
+<td>前置摄像头（必需）</td>
+</tr>
+<tr>
+<td>权限</td>
+<td>相机权限、录音权限、存储权限</td>
+</tr>
+</tbody></table>
+<br>
+<h2>四、操作说明</h2>
+<br>
+<h3>4.1 首次启动</h3>
+<p>1. 安装APK后点击应用图标启动</p>
+<p>2. 首次启动显示隐私政策弹窗</p>
+<p>3. 阅读隐私政策后点击"同意并继续"进入主界面</p>
+<br>
+<h3>4.2 输入提词内容</h3>
+<p>1. 点击编辑按钮（✏️图标）</p>
+<p>2. 在文本框中输入或粘贴提词内容</p>
+<p>3. 点击确定保存</p>
+<br>
+<h3>4.3 调节提词参数</h3>
+<li><strong>字体大小</strong>：点击字体放大/缩小按钮调节</li>
+<li><strong>透明度</strong>：滑动透明度滑块调节</li>
+<li><strong>滚动速度</strong>：滑动速度滑块调节</li>
+<br>
+<h3>4.4 调节缩放</h3>
+<li>点击🔍+按钮放大（减小畸变）</li>
+<li>点击🔍-按钮缩小（恢复广角）</li>
+<li>倍率显示在控制栏中</li>
+<br>
+<h3>4.5 开始录制</h3>
+<p>1. 确认提词内容已输入</p>
+<p>2. 点击录制按钮（红色圆点）开始录制</p>
+<p>3. 提词文字自动开始滚动</p>
+<p>4. 控制栏3秒后自动隐藏</p>
+<p>5. 轻触屏幕可重新显示控制栏</p>
+<br>
+<h3>4.6 停止录制</h3>
+<li>点击停止按钮结束录制</li>
+<li>视频自动保存到相册</li>
+<br>
+<h2>五、技术架构</h2>
+<br>
+<li><strong>开发语言</strong>：Kotlin</li>
+<li><strong>最低SDK</strong>：Android 7.0（API 24）</li>
+<li><strong>目标SDK</strong>：Android 14（API 34）</li>
+<li><strong>核心框架</strong>：Camera2 API + MediaRecorder</li>
+<li><strong>构建工具</strong>：Gradle 8.5</li>
+<li><strong>代码保护</strong>：R8混淆 + ProGuard资源压缩</li>
+<br>
+<h2>六、软件目录结构</h2>
+<br>
+<p>app/src/main/</p>
+<p>├── AndroidManifest.xml              # 应用配置</p>
+<p>├── java/com/teleprompter/app/</p>
+<p>│   ├── MainActivity.kt             # 主界面与控制逻辑</p>
+<p>│   ├── CameraHelper.kt            # 摄像头录制与缩放控制</p>
+<p>│   └── PrivacyConsentActivity.kt  # 隐私政策合规弹窗</p>
+<p>└── res/</p>
+<p>    ├── layout/</p>
+<p>    │   └── activity_main.xml       # 主界面布局</p>
+<p>    ├── drawable/                    # 图标资源</p>
+<p>    ├── mipmap-*/                    # 应用图标（多分辨率）</p>
+<p>    └── values/</p>
+<p>        ├── strings.xml             # 字符串资源</p>
+<p>        └── themes.xml              # 主题样式</p>
+<br>
+<h2>七、版本信息</h2>
+<br>
+<p><strong>V1.0</strong>（2026年9月7日）</p>
+<li>首次发布</li>
+<li>前置摄像头1080P录制</li>
+<li>半透明提词文字悬浮</li>
+<li>广角畸变校正（1.4x默认变焦）</li>
+<li>字体大小/透明度/滚动速度可调</li>
+<li>录制计时与控制栏自动隐藏</li>
+<li>隐私政策合规弹窗</li>
+<li>ProGuard混淆保护</li>
+<br>
+<hr>
+<br>
+<p>© 2026 短视频提词器. 保留所有权利。</p>
+</body>
+</html>
