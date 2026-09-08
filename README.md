@@ -1,6 +1,8 @@
-# 📱 提词器 Teleprompter App
+# 🎬 短视频提词器
 
 Android前置摄像头录制+提词器一体化App，自媒体口播神器。
+
+📥 **[下载最新版本](https://github.com/fuzhuangxiehui/TeleprompterApp/releases/latest)** | 🌐 **[官网](https://fuzhuangxiehui.github.io/TeleprompterApp/)** | 📋 **[隐私政策](https://fuzhuangxiehui.github.io/TeleprompterApp/privacy.html)**
 
 ## ✨ 功能
 
