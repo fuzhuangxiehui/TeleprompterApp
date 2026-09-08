@@ -1,74 +1,90 @@
-# 🎬 短视频提词器
+# 🎬 Short Video Teleprompter
 
-Android前置摄像头录制+提词器一体化App，自媒体口播神器。
+Android front-camera recording + teleprompter all-in-one app. The essential tool for content creators.
 
-📥 **[下载最新版本](https://github.com/fuzhuangxiehui/TeleprompterApp/releases/latest)** | 🌐 **[官网](https://fuzhuangxiehui.github.io/TeleprompterApp/)** | 📋 **[隐私政策](https://fuzhuangxiehui.github.io/TeleprompterApp/privacy.html)**
+📥 **[Download Latest Release](https://github.com/fuzhuangxiehui/TeleprompterApp/releases/latest)** | 🌐 **[Homepage](https://fuzhuangxiehui.github.io/TeleprompterApp/)** | 📋 **[Privacy Policy](https://fuzhuangxiehui.github.io/TeleprompterApp/privacy.html)** | 🇨🇳 [中文说明](#中文说明)
 
-## ✨ 功能
+## ✨ Features
 
-- **前置摄像头高清录制** — 1080P录制，录制视频纯净无提词文字
-- **透明提词器悬浮** — 文字半透明悬浮在屏幕上方，靠近前摄像头，看词时眼神更自然
-- **广角畸变校正** — 默认1.4x变焦减小前置广角畸变，可调1.0x-3.0x
-- **自动滚动** — 可调速度，播放/暂停/回到顶部
-- **字体大小调节** — 12sp ~ 40sp
-- **透明度调节** — 20%-100%，适应不同场景
-- **文字粘贴** — 支持从其他App复制粘贴提词内容
-- **录制计时** — 实时显示录制时长
-- **自动隐藏控制栏** — 录制开始3秒后自动隐藏，轻触屏幕重新显示
-- **🔒 零数据收集** — 不收集任何个人数据，无广告无追踪
+- **1080P Front Camera Recording** — Clean video output without any teleprompter text overlay
+- **Transparent Teleprompter Overlay** — Semi-transparent text floats near the front camera, so your eyes look natural while reading
+- **Wide-Angle Distortion Correction** — Default 1.4x digital zoom reduces barrel distortion; adjustable 1.0x–3.0x
+- **Auto-Scrolling** — Adjustable speed with play/pause/restart controls
+- **Font Size Adjustment** — 12sp to 40sp
+- **Transparency Control** — 20%–100% to suit any lighting condition
+- **Paste from Clipboard** — Copy your script from any app and paste it in
+- **Recording Timer** — Real-time recording duration display
+- **Auto-Hide Controls** — Controls fade out 3 seconds after recording starts; tap anywhere to bring them back
+- **🔒 Zero Data Collection** — No data collected, no ads, no tracking
 
-## 🔄 版本历史
+## 📥 Installation
+
+1. Download the APK from [Releases](https://github.com/fuzhuangxiehui/TeleprompterApp/releases/latest)
+2. Enable "Install from unknown sources" in your phone settings
+3. Tap the APK to install
+
+## 📱 Requirements
+
+- Android 7.0 (API 24) or above
+- Front-facing camera
+- ~3.5MB storage
+
+## 🔧 Tech Stack
+
+- **Language**: Kotlin
+- **Min SDK**: Android 7.0 (API 24)
+- **Target SDK**: Android 14 (API 34)
+- **Core**: Camera2 API + MediaRecorder
+- **Build**: Gradle 8.5 + R8 obfuscation
+
+## 🔄 Changelog
 
 ### v1.0.0 (2026-09-07)
-- 首次发布
-- 前置摄像头1080P录制 + 半透明提词悬浮
-- 广角畸变校正（1.4x默认变焦）
-- 隐私政策合规弹窗
-- ProGuard混淆保护
+- Initial release
+- 1080P front camera recording with transparent teleprompter overlay
+- Wide-angle distortion correction (1.4x default zoom)
+- Privacy policy consent dialog
+- ProGuard obfuscation
 
-## 🔧 技术栈
-
-- **语言**：Kotlin
-- **最低SDK**：Android 7.0 (API 24)
-- **目标SDK**：Android 14 (API 34)
-- **架构**：Camera2 API + MediaRecorder
-- **构建**：Gradle 8.5 + R8混淆
-
-## 📦 构建发布版
+## 📦 Building from Source
 
 ```bash
-# 1. 生成签名密钥（首次）
+# 1. Generate signing key (first time only)
 keytool -genkeypair -v \
   -keystore release/teleprompter_release.jks \
   -keyalg RSA -keysize 2048 -validity 10000 \
   -alias teleprompter
 
-# 2. 填写签名密码
-# 编辑 release/signing.properties
+# 2. Fill in signing config
+# Edit release/signing.properties
 
-# 3. 构建签名APK
+# 3. Build signed APK
 cd app && ../gradlew assembleRelease
 
-# 输出: app/build/outputs/apk/release/app-release.apk
+# Output: app/build/outputs/apk/release/app-release.apk
 ```
 
-## 📋 发布准备
+## 🔒 Privacy
 
-详见 `release/RELEASE_CHECKLIST.md`
+This app does not collect, upload, or share any user data. See [Privacy Policy](release/privacy_policy.html) for details.
 
-包含：
-- ProGuard混淆配置 ✅
-- 隐私政策页面 ✅
-- 权限合规弹窗 ✅
-- 签名密钥配置 ✅
-- 软著源代码提取工具 ✅
-- 应用素材清单（图标/截图/描述）
-- 各渠道上架要求对比
+## 📄 License
 
-## 🔒 隐私
+© 2026 Teleprompter App. All rights reserved.
 
-本应用不收集、不上传、不分享任何用户数据。详见 `release/privacy_policy.html`
+---
 
-## 📄 许可
+<a id="中文说明"></a>
+## 中文说明
 
-© 2026 提词器 App. 保留所有权利。
+**短视频提词器** — Android前置摄像头录制+提词器一体化App，自媒体口播神器。
+
+### 功能亮点
+- 📹 前置摄像头1080P高清录制（纯净视频，无提词文字叠加）
+- 📝 半透明提词文字悬浮在屏幕上方（靠近前摄像头，眼神更自然）
+- 🔍 广角畸变校正（默认1.4x数字变焦，可调1.0x-3.0x）
+- ⚙️ 字体大小/透明度/滚动速度可调
+- ⏱️ 录制计时、控制栏自动隐藏
+- 🔒 零数据收集、无广告无追踪
+
+📥 [下载APK](https://github.com/fuzhuangxiehui/TeleprompterApp/releases/latest) | 📋 [隐私政策](https://fuzhuangxiehui.github.io/TeleprompterApp/privacy.html)
